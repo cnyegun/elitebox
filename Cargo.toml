@@ -1,0 +1,16 @@
+[package]
+name = "elitebox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alsa = "0.9"
+symphonia = { version = "0.5", features = ["flac", "wav", "mp3", "aac"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+thiserror = "1.0"
+clap = { version = "4", features = ["derive"] }
+eframe = { version = "0.28", default-features = false, features = ["glow", "default_fonts"] }
+egui_extras = { version = "0.28", features = ["svg"] }
+libc = "0.2"
+
