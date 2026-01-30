@@ -57,12 +57,15 @@ sudo pacman -S alsa-lib
 ```bash
 git clone git@github.com:cnyegun/elitebox.git
 cd elitebox
+cargo test  # Verify the engine logic
 cargo build --release
 ```
 
-### 2. Run
+## 🧪 Testing
+
+Elitebox includes a unit test suite to verify bit-perfect math and transport logic:
 ```bash
-./target/release/elitebox
+cargo test
 ```
 
 ## ⌨️ Controls

@@ -199,7 +199,7 @@ impl BitPerfectPlayer {
     }
 
     fn write_decoded_to_device(&mut self, decoded: AudioBufferRef, bit_depth: u16, volume_db: f64) -> Result<(), PlayerError> {
-        let multiplier = 10.0f64.powf(volume_db / 20.0);
+        let multiplier = db_to_multiplier(volume_db);
 
         match bit_depth {
             16 => {
@@ -239,5 +239,25 @@ impl BitPerfectPlayer {
             _ => eprintln!("Unsupported bit depth: {}", bit_depth),
         }
         Ok(())
+    }
+}
+
+pub fn db_to_multiplier(db: f64) -> f64 {
+    if db >= 0.0 { 1.0 }
+    else if db <= -60.0 { 0.0 }
+    else { 10.0f64.powf(db / 20.0) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_volume_math() {
+        assert_eq!(db_to_multiplier(0.0), 1.0);
+        assert_eq!(db_to_multiplier(-60.0), 0.0);
+        // -6dB should be roughly 0.5x amplitude
+        let half = db_to_multiplier(-6.0206);
+        assert!((half - 0.5).abs() < 0.001);
     }
 }

@@ -141,3 +141,64 @@ impl GaplessEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gui::PlayerState;
+    use std::sync::{Arc, Mutex};
+
+    fn setup_engine() -> (GaplessEngine, Arc<Mutex<PlayerState>>) {
+        let state = Arc::new(Mutex::new(PlayerState {
+            current_track: None,
+            is_playing: false,
+            position_secs: 0.0,
+            duration_secs: 0.0,
+            volume_db: 0.0,
+            playlist: Vec::new(),
+            command: None,
+            error_message: None,
+            album_art: None,
+        }));
+        // Note: BitPerfectPlayer needs a mock or we skip hardware-dependent tests
+        // For logic tests, we focus on the Engine's state management
+        let engine = GaplessEngine::new(state.clone(), "default".into(), 0);
+        (engine, state)
+    }
+
+    #[test]
+    fn test_playlist_navigation() {
+        let (mut engine, state) = setup_engine();
+        engine.add_to_playlist(Path::new("test1.flac"));
+        engine.add_to_playlist(Path::new("test2.flac"));
+        
+        // Test Next
+        {
+            let mut s = state.lock().unwrap();
+            s.command = Some(crate::gui::PlayerCommand::Next);
+        }
+        let _ = engine.play(); // Process command
+        assert_eq!(engine.current_track, 1);
+
+        // Test Prev
+        {
+            let mut s = state.lock().unwrap();
+            s.command = Some(crate::gui::PlayerCommand::Prev);
+        }
+        let _ = engine.play(); // Process command
+        assert_eq!(engine.current_track, 0);
+    }
+
+    #[test]
+    fn test_empty_playlist_safety() {
+        let (mut engine, state) = setup_engine();
+        
+        {
+            let mut s = state.lock().unwrap();
+            s.command = Some(crate::gui::PlayerCommand::Next);
+        }
+        // This should not panic (fixed earlier)
+        let _ = engine.play(); 
+        assert_eq!(engine.current_track, 0);
+    }
+}
