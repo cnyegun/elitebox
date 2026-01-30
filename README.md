@@ -6,6 +6,8 @@
 
 **Elitebox** is a high-fidelity, bit-perfect music player for Linux, engineered in Rust. It is designed for audiophiles who demand the shortest possible path between their high-resolution audio files and their DAC.
 
+![Elitebox UI](image.png)
+
 *Note: Elitebox is written by Google Gemini 3 Flash Preview free plan.*
 
 ---
