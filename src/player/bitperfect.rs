@@ -46,7 +46,7 @@ impl BitPerfectPlayer {
         let meta_opts: MetadataOptions = Default::default();
         let fmt_opts: FormatOptions = Default::default();
         
-        let probed = symphonia::default::get_probe()
+        let mut probed = symphonia::default::get_probe()
             .format(&hint, mss, &fmt_opts, &meta_opts)
             .map_err(|e| {
                 if let Ok(mut s) = state.lock() {
@@ -57,9 +57,10 @@ impl BitPerfectPlayer {
 
         let mut format = probed.format;
         
-        // Find the first audio track
-        let track = format.tracks().iter()
+        // Find the first audio track and copy its parameters to avoid borrowing 'format'
+        let track_params = format.tracks().iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .map(|t| t.codec_params.clone())
             .ok_or_else(|| {
                 if let Ok(mut s) = state.lock() {
                     s.error_message = Some("No valid audio track found".into());
@@ -69,7 +70,7 @@ impl BitPerfectPlayer {
 
         let dec_opts: DecoderOptions = Default::default();
         let mut decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &dec_opts)
+            .make(&track_params, &dec_opts)
             .map_err(|e| {
                 if let Ok(mut s) = state.lock() {
                     s.error_message = Some(format!("Codec error: {}", e));
@@ -77,9 +78,9 @@ impl BitPerfectPlayer {
                 e
             })?;
 
-        let sample_rate = track.codec_params.sample_rate.ok_or(PlayerError::NoAudioTrack)?;
-        let channels = track.codec_params.channels.ok_or(PlayerError::NoAudioTrack)?.count() as u8;
-        let bit_depth = track.codec_params.bits_per_sample.unwrap_or(16) as u16;
+        let sample_rate = track_params.sample_rate.ok_or(PlayerError::NoAudioTrack)?;
+        let channels = track_params.channels.ok_or(PlayerError::NoAudioTrack)?.count() as u8;
+        let bit_depth = track_params.bits_per_sample.unwrap_or(16) as u16;
 
         self.device.configure_exact(sample_rate, bit_depth, channels).map_err(|e| {
             if let Ok(mut s) = state.lock() {
@@ -88,14 +89,65 @@ impl BitPerfectPlayer {
             e
         })?;
 
-        // Clear any previous errors on successful start
-        if let Ok(mut s) = state.lock() {
-            s.error_message = None;
+        // Update state with actual info
+        {
+            let mut s = state.lock().unwrap();
+            
+            // Extract metadata if available
+            let mut title = None;
+            let mut artist = None;
+            let mut album_art = None;
+
+            // 1. Check metadata in the format reader
+            if let Some(meta) = format.metadata().current() {
+                for tag in meta.tags() {
+                    if let Some(std_key) = tag.std_key {
+                        match std_key {
+                            symphonia::core::meta::StandardTagKey::TrackTitle => title = Some(tag.value.to_string()),
+                            symphonia::core::meta::StandardTagKey::Artist => artist = Some(tag.value.to_string()),
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(visual) = meta.visuals().first() {
+                    album_art = Some(visual.data.to_vec());
+                }
+            }
+            
+            // 2. If still missing info, check the probe metadata
+            if title.is_none() || album_art.is_none() {
+                if let Some(meta) = probed.metadata.get().as_ref().and_then(|m| m.current()) {
+                    for tag in meta.tags() {
+                        if let Some(std_key) = tag.std_key {
+                            match std_key {
+                                symphonia::core::meta::StandardTagKey::TrackTitle => {
+                                    if title.is_none() { title = Some(tag.value.to_string()); }
+                                }
+                                symphonia::core::meta::StandardTagKey::Artist => {
+                                    if artist.is_none() { artist = Some(tag.value.to_string()); }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if album_art.is_none() {
+                        if let Some(visual) = meta.visuals().first() {
+                            album_art = Some(visual.data.to_vec());
+                        }
+                    }
+                }
+            }
+
             if let Some(ref mut track_info) = s.current_track {
                 track_info.sample_rate = sample_rate;
                 track_info.bit_depth = bit_depth;
+                track_info.title = title;
+                track_info.artist = artist;
             }
-            s.duration_secs = track.codec_params.n_frames
+            s.album_art = album_art;
+            
+            s.error_message = None;
+            s.duration_secs = track_params.n_frames
                 .map(|f| f as f64 / sample_rate as f64)
                 .unwrap_or(0.0);
             s.position_secs = 0.0;

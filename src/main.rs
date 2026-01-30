@@ -49,6 +49,7 @@ fn main() -> Result<(), eframe::Error> {
         playlist: Vec::new(),
         command: None,
         error_message: None,
+        album_art: None,
     }));
 
     let player_state_audio = player_state.clone();

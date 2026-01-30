@@ -120,6 +120,8 @@ impl GaplessEngine {
                 filename: path.file_name().unwrap().to_string_lossy().to_string(),
                 sample_rate: 0,
                 bit_depth: 0,
+                title: None,
+                artist: None,
             });
             state.error_message = None; // Clear any old errors
         }

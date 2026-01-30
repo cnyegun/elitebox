@@ -15,6 +15,7 @@ pub struct PlayerState {
     pub playlist: Vec<PathBuf>,
     pub command: Option<PlayerCommand>,
     pub error_message: Option<String>,
+    pub album_art: Option<Vec<u8>>,
 }
 
 #[derive(PartialEq, Clone)]
@@ -24,10 +25,13 @@ pub enum PlayerCommand {
     PlayIndex(usize),
 }
 
+#[derive(PartialEq, Clone)]
 pub struct TrackInfo {
     pub filename: String,
     pub sample_rate: u32,
     pub bit_depth: u16,
+    pub title: Option<String>,
+    pub artist: Option<String>,
 }
 
 pub struct SucklessPlayer {
@@ -56,6 +60,7 @@ impl SucklessPlayer {
     }
 
     fn setup_fonts(&self, ctx: &egui::Context) {
+        egui_extras::install_image_loaders(ctx);
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "Inter".to_owned(),
@@ -140,25 +145,27 @@ impl SucklessPlayer {
     fn render_transport_controls(&mut self, ui: &mut egui::Ui) {
         let (playing, current_track, position, duration) = {
             let state = self.player.lock().unwrap();
-            (state.is_playing, state.current_track.is_some(), state.position_secs, state.duration_secs)
+            (state.is_playing, state.current_track.clone(), state.position_secs, state.duration_secs)
         };
 
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("NOW PLAYING:").strong());
-                if current_track {
-                    let state = self.player.lock().unwrap();
-                    if let Some(ref track) = state.current_track {
-                        ui.label(egui::RichText::new(&track.filename).color(egui::Color32::from_rgb(0xba, 0xbd, 0x2f)));
-                        ui.label(format!("| {}Hz / {}bit", track.sample_rate, track.bit_depth));
-                    }
+                if let Some(track) = current_track {
+                    let display_name = if let (Some(t), Some(a)) = (&track.title, &track.artist) {
+                        format!("{} - {}", a, t)
+                    } else {
+                        track.filename.clone()
+                    };
+                    ui.label(egui::RichText::new(display_name).color(egui::Color32::from_rgb(0xba, 0xbd, 0x2f)));
+                    ui.label(format!("| {}Hz / {}bit", track.sample_rate, track.bit_depth));
                 } else { ui.label("[Stopped]"); }
             });
 
             if playing || (position > 0.0) {
                 ui.horizontal(|ui| {
                     let progress = if duration > 0.0 { position / duration } else { 0.0 };
-                    ui.add(egui::ProgressBar::new(progress as f32).desired_height(4.0).desired_width(200.0));
+                    ui.add(egui::ProgressBar::new(progress as f32).desired_height(4.0).desired_width(ui.available_width() - 300.0));
                     ui.label(format!("{:.0}s / {:.0}s", position, duration));
                 });
             }
@@ -178,34 +185,48 @@ impl SucklessPlayer {
         });
     }
 
-    fn render_file_browser(&mut self, ui: &mut egui::Ui) {
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new(format!("BROWSER: {}", self.current_dir.display())).strong());
-            ui.separator();
-            let files = self.files.clone();
-            egui::ScrollArea::vertical()
-                .id_source("browser")
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    if ui.selectable_label(false, "⮤ .. (Parent)").clicked() { self.go_to_parent(); }
-                    for (idx, path) in files.iter().enumerate() {
-                        let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-                        let label = if path.is_dir() { format!("📁 {}", name) } else { format!("♫ {}", name) };
-                        
-                        let is_selected = self.selected_idx == idx;
-                        let response = ui.selectable_label(is_selected, label);
-                        
-                        // Detect start of drag
-                        if response.drag_started() {
-                            self.dragging_path = Some(path.clone());
-                        }
+    fn render_album_art(&mut self, ui: &mut egui::Ui) {
+        let (art, filename) = {
+            let state = self.player.lock().unwrap();
+            (state.album_art.clone(), state.current_track.as_ref().map(|t| t.filename.clone()))
+        };
 
-                        if response.clicked() {
-                            self.select_and_enter(idx);
-                        }
-                    }
-                });
-        });
+        if let Some(data) = art {
+            let uri = format!("bytes://{}.jpg", filename.unwrap_or_default());
+            let image = egui::Image::from_bytes(uri, data)
+                .rounding(4.0)
+                .fit_to_exact_size(egui::vec2(300.0, 300.0));
+            ui.add(image);
+        } else {
+            // Placeholder
+            let (rect, _) = ui.allocate_at_least(egui::vec2(300.0, 300.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(0x28, 0x28, 0x28));
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "♫", egui::FontId::proportional(64.0), egui::Color32::from_rgb(0x1d, 0x20, 0x21));
+        }
+    }
+
+    fn render_file_browser(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(format!("📁 BROWSER")).strong());
+        ui.label(egui::RichText::new(format!("{}", self.current_dir.display())).size(12.0).color(egui::Color32::GRAY));
+        ui.separator();
+        let files = self.files.clone();
+        egui::ScrollArea::vertical()
+            .id_source("browser")
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                if ui.selectable_label(false, "⮤ .. (Parent)").clicked() { self.go_to_parent(); }
+                for (idx, path) in files.iter().enumerate() {
+                    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                    let label = if path.is_dir() { format!("📁 {}", name) } else { format!("♫ {}", name) };
+                    
+                    let is_selected = self.selected_idx == idx;
+                    let response = ui.selectable_label(is_selected, label);
+                    
+                    if response.drag_started() { self.dragging_path = Some(path.clone()); }
+                    if response.clicked() { self.select_and_enter(idx); }
+                }
+            });
     }
 
     fn render_playlist(&mut self, ui: &mut egui::Ui) {
@@ -216,42 +237,28 @@ impl SucklessPlayer {
         
         let rect = ui.available_rect_before_wrap();
         
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new(format!("PLAYLIST ({})", playlist.len())).strong());
-            ui.separator();
-            
-            let response = egui::ScrollArea::vertical()
-                .id_source("playlist")
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    for (idx, path) in playlist.iter().enumerate() {
-                        let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-                        let is_current = idx == cur_idx;
-                        let text = if is_current { format!("▶ {}", name) } else { format!("  {}", name) };
-                        if ui.selectable_label(is_current, text).clicked() { self.play_index(idx); }
-                    }
-                }).inner;
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(format!("PLAYLIST ({})", playlist.len())).strong());
+        ui.separator();
+        
+        egui::ScrollArea::vertical()
+            .id_source("playlist")
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                for (idx, path) in playlist.iter().enumerate() {
+                    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                    let is_current = idx == cur_idx;
+                    let text = if is_current { format!("▶ {}", name) } else { format!("  {}", name) };
+                    if ui.selectable_label(is_current, text).clicked() { self.play_index(idx); }
+                }
+            });
 
-            // Handle internal Drop
-            if ui.input(|i| i.pointer.any_released()) {
-                if let Some(path) = self.dragging_path.take() {
-                    if ui.rect_contains_pointer(rect) {
-                        self.add_path_to_playlist_recursive(&path);
-                    }
+        if ui.input(|i| i.pointer.any_released()) {
+            if let Some(path) = self.dragging_path.take() {
+                if ui.rect_contains_pointer(rect) {
+                    self.add_path_to_playlist_recursive(&path);
                 }
             }
-        });
-
-        // Visual feedback for dragging
-        if let Some(path) = &self.dragging_path {
-            let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-            egui::Area::new(egui::Id::new("dnd_ghost"))
-                .interactable(false)
-                .fixed_pos(ui.ctx().pointer_interact_pos().unwrap_or_default())
-                .show(ui.ctx(), |ui| {
-                    ui.label(egui::RichText::new(format!("➕ {}", name))
-                        .background_color(egui::Color32::from_rgba_premultiplied(0, 0, 0, 180)));
-                });
         }
     }
 
@@ -317,6 +324,7 @@ impl eframe::App for SucklessPlayer {
         self.apply_suckless_theme(ctx);
         self.handle_input(ctx);
 
+        // 1. Top Panel: Controls
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.add_space(4.0);
             let error = self.player.lock().unwrap().error_message.clone();
@@ -327,12 +335,37 @@ impl eframe::App for SucklessPlayer {
             ui.add_space(4.0);
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.columns(2, |columns| {
-                self.render_file_browser(&mut columns[0]);
-                self.render_playlist(&mut columns[1]);
+        // 2. Left Panel: Browser (Fixed height problem)
+        egui::SidePanel::left("browser_panel")
+            .resizable(true)
+            .default_width(450.0)
+            .width_range(200.0..=800.0)
+            .show(ctx, |ui| {
+                ui.add_space(8.0);
+                self.render_album_art(ui);
+                ui.add_space(8.0);
+                ui.separator();
+                self.render_file_browser(ui);
             });
+
+        // 3. Central Panel: Playlist (Fills remaining space)
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.render_playlist(ui);
         });
+
+        // 4. Drag and Drop Ghost
+        if let Some(path) = &self.dragging_path {
+            let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+            egui::Area::new(egui::Id::new("dnd_ghost"))
+                .interactable(false)
+                .fixed_pos(ctx.pointer_interact_pos().unwrap_or_default())
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(format!("➕ {}", name))
+                        .background_color(egui::Color32::from_rgba_premultiplied(0, 0, 0, 180))
+                        .size(20.0));
+                });
+        }
+
         ctx.request_repaint();
     }
 }
